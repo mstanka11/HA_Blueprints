@@ -152,11 +152,11 @@ action:
             {% endif %}
             {% if include_hi_lo_flag %}
               {% if hi is not none and lo is not none %}
-                {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ". " %}
+                {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ ", low " ~ (lo|round(0)) ~ ". " %}
               {% elif hi is not none %}
-                {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ unit ~ ". " %}
+                {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ ". " %}
               {% elif lo is not none %}
-                {% set _msg = _msg ~ "Today’s low " ~ (lo|round(0)) ~ unit ~ ". " %}
+                {% set _msg = _msg ~ "Today’s low " ~ (lo|round(0)) ~ ". " %}
               {% endif %}
             {% endif %}
             {% if include_pop_flag and (pop is not none) %}
@@ -167,11 +167,11 @@ action:
               {% if cond_tom %}{% set t_text = cond_tom %}{% endif %}
               {% set hi_lo_t = "" %}
               {% if 'temperature' in tomorrow and 'templow' in tomorrow %}
-                {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit %}
+                {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) ~ ", low " ~ (tomorrow.templow|round(0)) %}
               {% elif 'temperature' in tomorrow %}
-                {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) ~ unit %}
+                {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) %}
               {% elif 'templow' in tomorrow %}
-                {% set hi_lo_t = "low " ~ (tomorrow.templow|round(0)) ~ unit %}
+                {% set hi_lo_t = "low " ~ (tomorrow.templow|round(0)) %}
               {% endif %}
               {% if t_text and hi_lo_t %}
                 {% set t_final = t_text ~ ", " ~ hi_lo_t %}
