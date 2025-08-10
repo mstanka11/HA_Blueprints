@@ -134,47 +134,60 @@ action:
           tomorrow: "{{ fc.forecast[1] if fc and 'forecast' in fc and fc.forecast|length>1 else {} }}"
           cond_tom: "{{ (tomorrow.condition | replace('_',' ')) if 'condition' in tomorrow else '' }}"
 
-          # Compose the spoken message from enabled pieces
+          # Compose the spoken message from enabled pieces (no .append calls)
           msg: >-
-            {%- set parts = [] -%}
-            {%- if temp_now is not none -%}
-              {%- set _ = parts.append("It’s currently " ~ (temp_now|round(0)) ~ unit ~ ", " ~ cond_now ~ ".") -%}
-            {%- else -%}
-              {%- set _ = parts.append("Current conditions: " ~ cond_now ~ ".") -%}
-            {%- endif -%}
+            {% set _msg = "" %}
 
-            {%- if include_hi_lo_flag -%}
-              {%- if hi is not none and lo is not none -%}
-                {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ".") -%}
-              {%- elif hi is not none -%}
-                {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ".") -%}
-              {%- elif lo is not none -%}
-                {%- set _ = parts.append("Today’s low " ~ (lo|round(0)) ~ unit ~ ".") -%}
-              {%- endif -%}
-            {%- endif -%}
+            {# Current conditions #}
+            {% if temp_now is not none %}
+              {% set _msg = _msg ~ "It’s currently " ~ (temp_now|round(0)) ~ unit ~ ", " ~ cond_now ~ ". " %}
+            {% else %}
+              {% set _msg = _msg ~ "Current conditions: " ~ cond_now ~ ". " %}
+            {% endif %}
 
-            {%- if include_pop_flag and (pop is not none) -%}
-              {%- set _ = parts.append("Chance of precipitation " ~ pop ~ " percent.") -%}
-            {%- endif -%}
+            {# Today's high/low #}
+            {% if include_hi_lo_flag %}
+              {% if hi is not none and lo is not none %}
+                {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ". " %}
+              {% elif hi is not none %}
+                {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ unit ~ ". " %}
+              {% elif lo is not none %}
+                {% set _msg = _msg ~ "Today’s low " ~ (lo|round(0)) ~ unit ~ ". " %}
+              {% endif %}
+            {% endif %}
 
-            {%- if include_tomorrow_flag and tomorrow -%}
-              {%- set tparts = [] -%}
-              {%- if cond_tom -%}
-                {%- set _ = tparts.append(cond_tom) -%}
-              {%- endif -%}
-              {%- if 'temperature' in tomorrow and 'templow' in tomorrow -%}
-                {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
-              {%- elif 'temperature' in tomorrow -%}
-                {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit) -%}
-              {%- elif 'templow' in tomorrow -%}
-                {%- set _ = tparts.append("low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
-              {%- endif -%}
-              {%- if tparts -%}
-                {%- set _ = parts.append("Tomorrow: " ~ (tparts|join(", ")) ~ ".") -%}
-              {%- endif -%}
-            {%- endif -%}
+            {# Chance of precipitation #}
+            {% if include_pop_flag and (pop is not none) %}
+              {% set _msg = _msg ~ "Chance of precipitation " ~ pop ~ " percent. " %}
+            {% endif %}
 
-            {{ parts|join(" ") }}
+            {# Tomorrow brief #}
+            {% if include_tomorrow_flag and tomorrow %}
+              {% set t_text = "" %}
+              {% if cond_tom %}{% set t_text = cond_tom %}{% endif %}
+
+              {% set hi_lo_t = "" %}
+              {% if 'temperature' in tomorrow and 'templow' in tomorrow %}
+                {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit %}
+              {% elif 'temperature' in tomorrow %}
+                {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) ~ unit %}
+              {% elif 'templow' in tomorrow %}
+                {% set hi_lo_t = "low " ~ (tomorrow.templow|round(0)) ~ unit %}
+              {% endif %}
+
+              {% if t_text and hi_lo_t %}
+                {% set t_final = t_text ~ ", " ~ hi_lo_t %}
+              {% else %}
+                {% set t_final = t_text ~ hi_lo_t %}
+              {% endif %}
+
+              {% if t_final|trim %}
+                {% set _msg = _msg ~ "Tomorrow: " ~ t_final ~ ". " %}
+              {% endif %}
+            {% endif %}
+
+            {{ _msg|trim }}
+
 
       # 4) Optional logging for debugging
       - service: logbook.log
