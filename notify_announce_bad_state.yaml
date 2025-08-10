@@ -1,9 +1,11 @@
 blueprint:
-  name: Notify/Announce on Bad State (Script)
+  name: Notify/Announce on Bad State (Script) + Custom Message Template
   description: >
     Re-usable script to create notifications and/or TTS announcements when a
     specified entity is in an undesired (“bad”) state. Intended to be called
-    from your own automations (e.g., person leaves a zone and a door lock is unlocked).
+    from your automations. Supports a custom message template and optional
+    prior_state/trigger text. Works with any entity that has a simple state
+    (e.g., light on/off, lock locked/unlocked).
   domain: script
   author: m365-copilot
   source_url: https://github.com/youruser/yourrepo/blob/main/blueprints/script/m365/notify_announce_bad_state.yaml
@@ -11,15 +13,15 @@ blueprint:
   input:
     check_entity:
       name: Entity to check
-      description: Entity that should not be in the "bad" state (e.g., a lock).
+      description: Entity that should not be in the "bad" state (e.g., a lock or light).
       selector:
         entity: {}
 
     desired_bad_state:
       name: Bad state (exact)
       description: >
-        Exact state that should be considered "bad". Leave blank to auto-infer:
-        lock → unlocked, binary_sensor → on, cover → open, otherwise → on.
+        Exact state considered “bad”. Leave blank to auto-infer:
+        lock→unlocked, binary_sensor→on, cover→open, otherwise→on.
       default: ""
       selector:
         text: {}
@@ -35,7 +37,36 @@ blueprint:
           unit_of_measurement: s
           mode: box
 
-    # --- MESSAGE / TITLES ---
+    # --- CUSTOM MESSAGE CONTROLS ---
+    message_template:
+      name: Custom message template (optional)
+      description: |
+        This template is rendered with these variables:
+          - check_entity_id, check_name, check_domain
+          - state_now (current state), bad_state
+          - prior_state (optional input), trigger_text (optional input)
+        Examples:
+          • {{ check_name }} is {{ state_now }}.
+          • {{ check_name }} changed from {{ prior_state or 'unknown' }} to {{ state_now }}{{ ' (' ~ trigger_text ~ ')' if trigger_text else '' }}.
+      default: ""
+      selector:
+        text:
+          multiline: true
+    prior_state:
+      name: Prior state (optional; pass from your automation)
+      description: Often set to {{ trigger.from_state.state }} in your calling automation.
+      default: ""
+      selector:
+        text: {}
+
+    trigger_text:
+      name: Trigger context (optional)
+      description: Free text like "Michael left Home" to add context in the message.
+      default: ""
+      selector:
+        text: {}
+
+    # --- MESSAGE / TITLES (fallback builder) ---
     title_text:
       name: Notification title
       default: "Home Alert"
@@ -44,14 +75,12 @@ blueprint:
 
     message_prefix:
       name: Message prefix (optional)
-      description: Optional sentence to prepend before the auto-built message.
       default: ""
       selector:
         text: {}
 
     message_suffix:
       name: Message suffix (optional)
-      description: Optional sentence to append after the auto-built message.
       default: ""
       selector:
         text: {}
@@ -92,7 +121,7 @@ blueprint:
       selector:
         boolean: {}
 
-    # --- TTS ANNOUNCEMENT ---
+    # --- TTS ---
     use_tts:
       name: Make a TTS announcement
       default: true
@@ -131,12 +160,18 @@ blueprint:
 
 # ------------ SCRIPT SEQUENCE ------------
 sequence:
-  # 0) Bind inputs to variables (no Jinja in !input bindings)
+  # 0) Bind inputs to variables (no Jinja on !input usage)
   - variables:
       check_entity_id: !input check_entity
       desired_bad_state_raw: !input desired_bad_state
       grace_sec: !input grace_seconds
 
+      # custom message inputs
+      message_template_raw: !input message_template
+      prior_state_raw: !input prior_state
+      trigger_text_raw: !input trigger_text
+
+      # fallback message inputs
       title_text_raw: !input title_text
       msg_prefix_raw: !input message_prefix
       msg_suffix_raw: !input message_suffix
@@ -153,7 +188,7 @@ sequence:
       voice_raw: !input voice_short_name
       tts_cache_flag: !input tts_cache
 
-  # 1) Compute effective "bad" state and friendly names
+  # 1) Compute effective “bad” state and friendly names
   - variables:
       check_domain: "{{ check_entity_id.split('.')[0] }}"
       bad_state: >-
@@ -177,6 +212,9 @@ sequence:
       voice_name: >-
         {% set v = voice_raw | trim %}
         {{ v if v else 'en-US-SaraNeural' }}
+      prior_state: "{{ prior_state_raw | trim if prior_state_raw is string else '' }}"
+      trigger_text: "{{ trigger_text_raw | trim if trigger_text_raw is string else '' }}"
+      message_template_is_set: "{{ (message_template_raw is string) and (message_template_raw | trim != '') }}"
 
   # 2) Optional grace delay then re-check
   - choose:
@@ -197,14 +235,11 @@ sequence:
     then:
       - stop: "Entity not in bad state; nothing to do."
 
-  # 4) Build human-readable message safely (no .append)
+  # 4) Fallback message (auto builder) — used only if no custom template supplied
   - variables:
-      pretty_state: "{{ (state_now | replace('_',' ')) }}"
       auto_message: >-
-        {% set _m = "" %}
-        {% set _m = _m ~ check_name ~ " is " ~ pretty_state ~ "." %}
-        {{ _m | trim }}
-      final_message: "{{ (msg_prefix ~ auto_message ~ msg_suffix) | trim }}"
+        {% set pretty_state = state_now | replace('_',' ') %}
+        {{ (check_name ~ " is " ~ pretty_state ~ ".") | trim }}
 
   # 5) Persistent notification (optional)
   - choose:
@@ -212,10 +247,21 @@ sequence:
           - condition: template
             value_template: "{{ use_persist_flag }}"
         sequence:
-          - service: persistent_notification.create
-            data:
-              title: "{{ title_text }}"
-              message: "{{ final_message }}"
+          # if custom template is set, render it directly in this field
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ message_template_is_set }}"
+                sequence:
+                  - service: persistent_notification.create
+                    data:
+                      title: "{{ title_text }}"
+                      message: !input message_template
+            default:
+              - service: persistent_notification.create
+                data:
+                  title: "{{ title_text }}"
+                  message: "{{ (msg_prefix ~ auto_message ~ msg_suffix) | trim }}"
     default: []
 
   # 6) Push notification via Mobile App (optional)
@@ -225,21 +271,40 @@ sequence:
             value_template: >
               {{ use_push_flag and (mobile_targets_list | count) > 0 }}
         sequence:
-          - service: notify.notify
-            data:
-              title: "{{ title_text }}"
-              message: "{{ final_message }}"
-              target: !input mobile_targets
-              data:
-                channel: "{{ push_channel_raw }}"
-                ttl: 0
-                priority: high
-                # iOS critical sound; Android still uses high priority channel
-                push:
-                  sound:
-                    name: default
-                    critical: "{{ 1 if push_critical_flag else 0 }}"
-                    volume: 1.0
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ message_template_is_set }}"
+                sequence:
+                  - service: notify.notify
+                    data:
+                      title: "{{ title_text }}"
+                      message: !input message_template
+                      target: !input mobile_targets
+                      data:
+                        channel: "{{ push_channel_raw }}"
+                        ttl: 0
+                        priority: high
+                        push:
+                          sound:
+                            name: default
+                            critical: "{{ 1 if push_critical_flag else 0 }}"
+                            volume: 1.0
+            default:
+              - service: notify.notify
+                data:
+                  title: "{{ title_text }}"
+                  message: "{{ (msg_prefix ~ auto_message ~ msg_suffix) | trim }}"
+                  target: !input mobile_targets
+                  data:
+                    channel: "{{ push_channel_raw }}"
+                    ttl: 0
+                    priority: high
+                    push:
+                      sound:
+                        name: default
+                        critical: "{{ 1 if push_critical_flag else 0 }}"
+                        volume: 1.0
     default: []
 
   # 7) TTS announcement (optional) per selected media_player
@@ -252,16 +317,19 @@ sequence:
           - repeat:
               for_each: !input media_players
               sequence:
-                - service: tts.speak
-                  target:
-                    entity_id: !input tts_entity
-                  data:
-                    media_player_entity_id: "{{ repeat.item }}"
-                    cache: "{{ tts_cache_flag }}"
-                    options:
-                      voice: "{{ voice_name }}"
-                    message: "{{ final_message }}"
-    default: []
-
-mode: parallel
-max: 10
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ message_template_is_set }}"
+                      sequence:
+                        - service: tts.speak
+                          target:
+                            entity_id: !input tts_entity
+                          data:
+                            media_player_entity_id: "{{ repeat.item }}"
+                            cache: "{{ tts_cache_flag }}"
+                            options:
+                              voice: "{{ voice_name }}"
+                            message: !input message_template
+                  default:
+                    - service: tts
