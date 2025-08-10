@@ -1,0 +1,185 @@
+blueprint:
+  name: Weather Briefing via Microsoft TTS (Wyoming)
+  description: >
+    Speak a short weather briefing using your weather entity (e.g., OpenWeather)
+    and Microsoft Azure TTS via the Wyoming add-on. Includes current conditions,
+    today's high/low, optional precipitation probability, and optional brief outlook
+    for tomorrow. Uses tts.speak (pipeline-independent).
+  domain: automation
+  author: m365-copilot
+  source_url: https://github.com/youruser/yourrepo/blob/main/blueprints/automation/m365/azure_tts_weather.yaml
+
+  input:
+    weather_entity:
+      name: Weather entity
+      description: Select your weather entity (e.g., OpenWeather).
+      selector:
+        entity:
+          domain: weather
+
+    tts_entity:
+      name: Microsoft TTS entity (Wyoming)
+      description: Your Microsoft TTS engine (e.g., tts.wyoming_microsoft_tts).
+      selector:
+        entity:
+          domain: tts
+
+    media_players:
+      name: Speakers / Displays
+      description: One or more media_player entities (e.g., Nest Hub).
+      selector:
+        entity:
+          domain: media_player
+          multiple: true
+
+    speak_time:
+      name: Announcement time
+      description: Time of day to speak the briefing.
+      default: "07:30:00"
+      selector:
+        time: {}
+
+    # --- Single open text field for voice (Sara default) ---
+    voice_short_name:
+      name: Azure voice short name (exact)
+      description: >
+        Enter the exact Azure voice short name to use (e.g., en-US-SaraNeural).
+        Leave as default to use Sara. You can change this any time when creating
+        the automation from this blueprint.
+      default: "en-US-SaraNeural"
+      selector:
+        text: {}
+
+    include_hi_lo:
+      name: Include today's high/low
+      default: true
+      selector:
+        boolean: {}
+
+    include_pop:
+      name: Include chance of precipitation
+      description: Only announced if your provider exposes precipitation_probability.
+      default: true
+      selector:
+        boolean: {}
+
+    include_tomorrow:
+      name: Include tomorrow's brief outlook
+      default: false
+      selector:
+        boolean: {}
+
+    weekday_only:
+      name: Weekdays only (Mon–Fri)
+      default: false
+      selector:
+        boolean: {}
+
+# --- Trigger ---
+trigger:
+  - platform: time
+    at: !input speak_time
+
+# --- Condition (optional weekdays filter) ---
+condition:
+  - condition: template
+    value_template: >-
+      {{ (not (!input weekday_only)) or (now().isoweekday() in [1,2,3,4,5]) }}
+
+# --- Actions ---
+action:
+  # 1) Fetch daily forecast (today/tomorrow) into a response variable
+  - service: weather.get_forecasts
+    target:
+      entity_id: !input weather_entity
+    data:
+      type: daily
+    response_variable: daily
+
+  # 2) Build variables for message + final voice
+  - variables:
+      # Final voice to use: take text input; if blank, default to Sara
+      final_voice: >-
+        {% set v = (!input voice_short_name)|trim %}
+        {{ v if v else 'en-US-SaraNeural' }}
+
+      unit: "{{ state_attr(!input weather_entity, 'temperature_unit') or '°' }}"
+      temp_now: "{{ state_attr(!input weather_entity, 'temperature') }}"
+      cond_now: "{{ states(!input weather_entity) | replace('_',' ') }}"
+
+      # Grab the first value from response dict (maps weather_entity -> data)
+      fc: >-
+        {% if daily is defined and daily|count > 0 %}
+          {{ (daily | dict2items | first).value }}
+        {% else %}{{ none }}{% endif %}
+      today: "{{ fc.forecast[0] if fc and fc.forecast|length>0 else dict() }}"
+      hi: "{{ today.temperature if 'temperature' in today else none }}"
+      lo: "{{ today.templow if 'templow' in today else none }}"
+      pop: "{{ today.precipitation_probability if 'precipitation_probability' in today else none }}"
+      tomorrow: "{{ fc.forecast[1] if fc and fc.forecast|length>1 else dict() }}"
+      cond_tom: "{{ (tomorrow.condition | replace('_',' ')) if 'condition' in tomorrow else '' }}"
+
+      # Compose the spoken message from enabled pieces
+      msg: >-
+        {%- set parts = [] -%}
+        {%- if temp_now is not none -%}
+          {%- set _ = parts.append("It’s currently " ~ (temp_now|round(0)) ~ unit ~ ", " ~ cond_now ~ ".") -%}
+        {%- else -%}
+          {%- set _ = parts.append("Current conditions: " ~ cond_now ~ ".") -%}
+        {%- endif -%}
+
+        {%- if !input include_hi_lo -%}
+          {%- if hi is not none and lo is not none -%}
+            {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ".") -%}
+          {%- elif hi is not none -%}
+            {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ".") -%}
+          {%- elif lo is not none -%}
+            {%- set _ = parts.append("Today’s low " ~ (lo|round(0)) ~ unit ~ ".") -%}
+          {%- endif -%}
+        {%- endif -%}
+
+        {%- if !input include_pop and (pop is not none) -%}
+          {%- set _ = parts.append("Chance of precipitation " ~ pop ~ " percent.") -%}
+        {%- endif -%}
+
+        {%- if !input include_tomorrow and tomorrow -%}
+          {%- set tparts = [] -%}
+          {%- if cond_tom -%}
+            {%- set _ = tparts.append(cond_tom) -%}
+          {%- endif -%}
+          {%- if 'temperature' in tomorrow and 'templow' in tomorrow -%}
+            {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
+          {%- elif 'temperature' in tomorrow -%}
+            {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit) -%}
+          {%- elif 'templow' in tomorrow -%}
+            {%- set _ = tparts.append("low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
+          {%- endif -%}
+          {%- if tparts -%}
+            {%- set _ = parts.append("Tomorrow: " ~ (tparts|join(", ")) ~ ".") -%}
+          {%- endif -%}
+        {%- endif -%}
+
+        {{ parts|join(" ") }}
+
+  # 3) Optional logging for debugging
+  - service: logbook.log
+    data:
+      name: Weather TTS
+      message: "{{ msg }}"
+      entity_id: !input weather_entity
+
+  # 4) Speak on each selected media_player
+  - repeat:
+      for_each: !input media_players
+      sequence:
+        - service: tts.speak
+          target:
+            entity_id: !input tts_entity
+          data:
+            media_player_entity_id: "{{ repeat.item }}"
+            cache: false
+            options:
+              voice: "{{ final_voice }}"
+            message: "{{ msg }}"
+
+mode: single
