@@ -332,4 +332,12 @@ sequence:
                               voice: "{{ voice_name }}"
                             message: !input message_template
                   default:
-                    - service: tts
+                    - service: tts.speak
+                      target:
+                        entity_id: !input tts_entity
+                      data:
+                        media_player_entity_id: "{{ repeat.item }}"
+                        cache: "{{ tts_cache_flag }}"
+                        options:
+                          voice: "{{ voice_name }}"
+                        message: "{{ (msg_prefix ~ auto_message ~ msg_suffix) | trim }}"
