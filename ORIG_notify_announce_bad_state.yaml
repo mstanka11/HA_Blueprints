@@ -307,7 +307,6 @@ sequence:
                         volume: 1.0
     default: []
 
-
   # 7) TTS announcement (optional) per selected media_player
   - choose:
       - conditions:
