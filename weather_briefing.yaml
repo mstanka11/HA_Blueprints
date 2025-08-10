@@ -120,16 +120,18 @@ action:
           temp_now: "{{ state_attr(weather_entity_id, 'temperature') }}"
           cond_now: "{{ states(weather_entity_id) | replace('_',' ') }}"
 
-          # Grab the first value from response dict (maps weather_entity -> data)
+          # Get forecast container for our weather entity directly from the response
           fc: >-
-            {% if daily is defined and daily|count > 0 %}
-              {{ (daily | dict2items | first).value }}
+            {% set key = weather_entity_id %}
+            {% if daily is defined and key in daily %}
+              {{ daily[key] }}
             {% else %}{{ none }}{% endif %}
-          today: "{{ fc.forecast[0] if fc and fc.forecast|length>0 else dict() }}"
+
+          today: "{{ fc.forecast[0] if fc and 'forecast' in fc and fc.forecast|length>0 else {} }}"
           hi: "{{ today.temperature if 'temperature' in today else none }}"
           lo: "{{ today.templow if 'templow' in today else none }}"
           pop: "{{ today.precipitation_probability if 'precipitation_probability' in today else none }}"
-          tomorrow: "{{ fc.forecast[1] if fc and fc.forecast|length>1 else dict() }}"
+          tomorrow: "{{ fc.forecast[1] if fc and 'forecast' in fc and fc.forecast|length>1 else {} }}"
           cond_tom: "{{ (tomorrow.condition | replace('_',' ')) if 'condition' in tomorrow else '' }}"
 
           # Compose the spoken message from enabled pieces
