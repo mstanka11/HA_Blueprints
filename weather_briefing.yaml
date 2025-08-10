@@ -1,3 +1,4 @@
+
 blueprint:
   name: Weather Briefing via Microsoft TTS (Wyoming)
   description: >
@@ -39,7 +40,6 @@ blueprint:
       selector:
         time: {}
 
-    # ---- Single open text field for voice (Sara default) ----
     voice_short_name:
       name: Azure voice short name (exact)
       description: >
@@ -75,33 +75,38 @@ blueprint:
       selector:
         boolean: {}
 
-# --- Trigger ---
+    volume_bump_level:
+      name: Volume bump level
+      description: Volume level to temporarily set before speaking (0.0 to 1.0).
+      default: 0.8
+      selector:
+        number:
+          min: 0.0
+          max: 1.0
+          step: 0.05
+          mode: slider
+
 trigger:
   - platform: time
     at: !input speak_time
 
-# --- Actions ---
 action:
-  # 0) Bind blueprint inputs to variables (SAFE: no Jinja here)
   - variables:
       weather_entity_id: !input weather_entity
       tts_entity_id: !input tts_entity
       media_players_list: !input media_players
-
       weekday_only_flag: !input weekday_only
       include_hi_lo_flag: !input include_hi_lo
       include_pop_flag: !input include_pop
       include_tomorrow_flag: !input include_tomorrow
-
       voice_raw: !input voice_short_name
+      volume_bump_level: !input volume_bump_level
 
-  # 1) Optional weekdays gating (done as an action-level IF)
   - if:
       - condition: template
         value_template: >
           {{ (not weekday_only_flag) or (now().isoweekday() in [1,2,3,4,5]) }}
     then:
-      # 2) Fetch daily forecast (today/tomorrow) into a response variable
       - service: weather.get_forecasts
         target:
           entity_id: !input weather_entity
@@ -109,43 +114,31 @@ action:
           type: daily
         response_variable: daily
 
-      # 3) Build variables for message + final voice
       - variables:
-          # voice: use the text field; if blank, default to Sara
           final_voice: >-
             {% set v = (voice_raw | trim) %}
             {{ v if v else 'en-US-SaraNeural' }}
-
           unit: "{{ state_attr(weather_entity_id, 'temperature_unit') or '°' }}"
           temp_now: "{{ state_attr(weather_entity_id, 'temperature') }}"
           cond_now: "{{ states(weather_entity_id) | replace('_',' ') }}"
-
-          # Get forecast container for our weather entity directly from the response
           fc: >-
             {% set key = weather_entity_id %}
             {% if daily is defined and key in daily %}
               {{ daily[key] }}
             {% else %}{{ none }}{% endif %}
-
           today: "{{ fc.forecast[0] if fc and 'forecast' in fc and fc.forecast|length>0 else {} }}"
           hi: "{{ today.temperature if 'temperature' in today else none }}"
           lo: "{{ today.templow if 'templow' in today else none }}"
           pop: "{{ today.precipitation_probability if 'precipitation_probability' in today else none }}"
           tomorrow: "{{ fc.forecast[1] if fc and 'forecast' in fc and fc.forecast|length>1 else {} }}"
           cond_tom: "{{ (tomorrow.condition | replace('_',' ')) if 'condition' in tomorrow else '' }}"
-
-          # Compose the spoken message from enabled pieces (no .append calls)
           msg: >-
             {% set _msg = "" %}
-
-            {# Current conditions #}
             {% if temp_now is not none %}
               {% set _msg = _msg ~ "It’s currently " ~ (temp_now|round(0)) ~ unit ~ ", " ~ cond_now ~ ". " %}
             {% else %}
               {% set _msg = _msg ~ "Current conditions: " ~ cond_now ~ ". " %}
             {% endif %}
-
-            {# Today's high/low #}
             {% if include_hi_lo_flag %}
               {% if hi is not none and lo is not none %}
                 {% set _msg = _msg ~ "Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ". " %}
@@ -155,17 +148,12 @@ action:
                 {% set _msg = _msg ~ "Today’s low " ~ (lo|round(0)) ~ unit ~ ". " %}
               {% endif %}
             {% endif %}
-
-            {# Chance of precipitation #}
             {% if include_pop_flag and (pop is not none) %}
               {% set _msg = _msg ~ "Chance of precipitation " ~ pop ~ " percent. " %}
             {% endif %}
-
-            {# Tomorrow brief #}
             {% if include_tomorrow_flag and tomorrow %}
               {% set t_text = "" %}
               {% if cond_tom %}{% set t_text = cond_tom %}{% endif %}
-
               {% set hi_lo_t = "" %}
               {% if 'temperature' in tomorrow and 'templow' in tomorrow %}
                 {% set hi_lo_t = "high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit %}
@@ -174,32 +162,33 @@ action:
               {% elif 'templow' in tomorrow %}
                 {% set hi_lo_t = "low " ~ (tomorrow.templow|round(0)) ~ unit %}
               {% endif %}
-
               {% if t_text and hi_lo_t %}
                 {% set t_final = t_text ~ ", " ~ hi_lo_t %}
               {% else %}
                 {% set t_final = t_text ~ hi_lo_t %}
               {% endif %}
-
               {% if t_final|trim %}
                 {% set _msg = _msg ~ "Tomorrow: " ~ t_final ~ ". " %}
               {% endif %}
             {% endif %}
-
             {{ _msg|trim }}
 
-
-      # 4) Optional logging for debugging
       - service: logbook.log
         data:
           name: Weather TTS
           message: "{{ msg }}"
           entity_id: !input weather_entity
 
-      # 5) Speak on each selected media_player
       - repeat:
           for_each: !input media_players
           sequence:
+            - variables:
+                current_volume: "{{ state_attr(repeat.item, 'volume_level') }}"
+            - service: media_player.volume_set
+              target:
+                entity_id: "{{ repeat.item }}"
+              data:
+                volume_level: "{{ volume_bump_level }}"
             - service: tts.speak
               target:
                 entity_id: !input tts_entity
@@ -209,5 +198,19 @@ action:
                 options:
                   voice: "{{ final_voice }}"
                 message: "{{ msg }}"
+
+            - service: media_player.media_stop
+              target:
+                entity_id: "{{ repeat.item }}"
+            - service: media_player.volume_set
+              target:
+                entity_id: "{{ repeat.item }}"
+              data:
+                volume_level: "{{ current_volume }}"
+            - service: media_player.volume_set
+              target:
+                entity_id: "{{ repeat.item }}"
+              data:
+                volume_level: "{{ current_volume }}"
 
 mode: single
