@@ -1,10 +1,9 @@
-
 blueprint:
   name: Weather Briefing via Microsoft TTS (Wyoming)
   description: >
     Speak a short weather briefing using your weather entity (e.g., OpenWeather)
     and Microsoft Azure TTS via the Wyoming add-on. Includes current conditions,
-    today's high/low, optional precipitation probability, and optional brief outlook
+    today\'s high/low, optional precipitation probability, and optional brief outlook
     for tomorrow. Uses tts.speak (pipeline-independent).
   domain: automation
   author: m365-copilot
@@ -77,13 +76,24 @@ blueprint:
 
     volume_bump_level:
       name: Volume bump level
-      description: Volume level to temporarily set before speaking (0.0 to 1.0).
+      description: Volume level to temporarily set after cast starts (0.0 to 1.0).
       default: 0.8
       selector:
         number:
           min: 0.0
           max: 1.0
           step: 0.05
+          mode: slider
+
+    volume_restore_delay:
+      name: Delay before restoring volume and stopping playback
+      description: Time in seconds to wait after speaking before restoring volume and stopping.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
           mode: slider
 
 trigger:
@@ -101,6 +111,7 @@ action:
       include_tomorrow_flag: !input include_tomorrow
       voice_raw: !input voice_short_name
       volume_bump_level: !input volume_bump_level
+      volume_restore_delay: !input volume_restore_delay
 
   - if:
       - condition: template
@@ -184,11 +195,6 @@ action:
           sequence:
             - variables:
                 current_volume: "{{ state_attr(repeat.item, 'volume_level') }}"
-            - service: media_player.volume_set
-              target:
-                entity_id: "{{ repeat.item }}"
-              data:
-                volume_level: "{{ volume_bump_level }}"
             - service: tts.speak
               target:
                 entity_id: !input tts_entity
@@ -198,15 +204,18 @@ action:
                 options:
                   voice: "{{ final_voice }}"
                 message: "{{ msg }}"
-
-            - service: media_player.media_stop
-              target:
-                entity_id: "{{ repeat.item }}"
+            - delay:
+                seconds: 2
             - service: media_player.volume_set
               target:
                 entity_id: "{{ repeat.item }}"
               data:
-                volume_level: "{{ current_volume }}"
+                volume_level: "{{ volume_bump_level }}"
+            - delay:
+                seconds: "{{ volume_restore_delay }}"
+            - service: media_player.media_stop
+              target:
+                entity_id: "{{ repeat.item }}"
             - service: media_player.volume_set
               target:
                 entity_id: "{{ repeat.item }}"
