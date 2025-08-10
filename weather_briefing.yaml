@@ -39,7 +39,7 @@ blueprint:
       selector:
         time: {}
 
-    # --- Single open text field for voice (Sara default) ---
+    # ---- Single open text field for voice (Sara default) ----
     voice_short_name:
       name: Azure voice short name (exact)
       description: >
@@ -80,106 +80,119 @@ trigger:
   - platform: time
     at: !input speak_time
 
-# --- Condition (optional weekdays filter) ---
-condition:
-  - condition: template
-    value_template: >-
-      {{ (not (!input weekday_only)) or (now().isoweekday() in [1,2,3,4,5]) }}
-
 # --- Actions ---
 action:
-  # 1) Fetch daily forecast (today/tomorrow) into a response variable
-  - service: weather.get_forecasts
-    target:
-      entity_id: !input weather_entity
-    data:
-      type: daily
-    response_variable: daily
-
-  # 2) Build variables for message + final voice
+  # 0) Bind blueprint inputs to variables (SAFE: no Jinja here)
   - variables:
-      # Final voice to use: take text input; if blank, default to Sara
-      final_voice: >-
-        {% set v = (!input voice_short_name)|trim %}
-        {{ v if v else 'en-US-SaraNeural' }}
+      weather_entity_id: !input weather_entity
+      tts_entity_id: !input tts_entity
+      media_players_list: !input media_players
 
-      unit: "{{ state_attr(!input weather_entity, 'temperature_unit') or '°' }}"
-      temp_now: "{{ state_attr(!input weather_entity, 'temperature') }}"
-      cond_now: "{{ states(!input weather_entity) | replace('_',' ') }}"
+      weekday_only_flag: !input weekday_only
+      include_hi_lo_flag: !input include_hi_lo
+      include_pop_flag: !input include_pop
+      include_tomorrow_flag: !input include_tomorrow
 
-      # Grab the first value from response dict (maps weather_entity -> data)
-      fc: >-
-        {% if daily is defined and daily|count > 0 %}
-          {{ (daily | dict2items | first).value }}
-        {% else %}{{ none }}{% endif %}
-      today: "{{ fc.forecast[0] if fc and fc.forecast|length>0 else dict() }}"
-      hi: "{{ today.temperature if 'temperature' in today else none }}"
-      lo: "{{ today.templow if 'templow' in today else none }}"
-      pop: "{{ today.precipitation_probability if 'precipitation_probability' in today else none }}"
-      tomorrow: "{{ fc.forecast[1] if fc and fc.forecast|length>1 else dict() }}"
-      cond_tom: "{{ (tomorrow.condition | replace('_',' ')) if 'condition' in tomorrow else '' }}"
+      voice_raw: !input voice_short_name
 
-      # Compose the spoken message from enabled pieces
-      msg: >-
-        {%- set parts = [] -%}
-        {%- if temp_now is not none -%}
-          {%- set _ = parts.append("It’s currently " ~ (temp_now|round(0)) ~ unit ~ ", " ~ cond_now ~ ".") -%}
-        {%- else -%}
-          {%- set _ = parts.append("Current conditions: " ~ cond_now ~ ".") -%}
-        {%- endif -%}
+  # 1) Optional weekdays gating (done as an action-level IF)
+  - if:
+      - condition: template
+        value_template: >
+          {{ (not weekday_only_flag) or (now().isoweekday() in [1,2,3,4,5]) }}
+    then:
+      # 2) Fetch daily forecast (today/tomorrow) into a response variable
+      - service: weather.get_forecasts
+        target:
+          entity_id: !input weather_entity
+        data:
+          type: daily
+        response_variable: daily
 
-        {%- if !input include_hi_lo -%}
-          {%- if hi is not none and lo is not none -%}
-            {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ".") -%}
-          {%- elif hi is not none -%}
-            {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ".") -%}
-          {%- elif lo is not none -%}
-            {%- set _ = parts.append("Today’s low " ~ (lo|round(0)) ~ unit ~ ".") -%}
-          {%- endif -%}
-        {%- endif -%}
+      # 3) Build variables for message + final voice
+      - variables:
+          # voice: use the text field; if blank, default to Sara
+          final_voice: >-
+            {% set v = (voice_raw | trim) %}
+            {{ v if v else 'en-US-SaraNeural' }}
 
-        {%- if !input include_pop and (pop is not none) -%}
-          {%- set _ = parts.append("Chance of precipitation " ~ pop ~ " percent.") -%}
-        {%- endif -%}
+          unit: "{{ state_attr(weather_entity_id, 'temperature_unit') or '°' }}"
+          temp_now: "{{ state_attr(weather_entity_id, 'temperature') }}"
+          cond_now: "{{ states(weather_entity_id) | replace('_',' ') }}"
 
-        {%- if !input include_tomorrow and tomorrow -%}
-          {%- set tparts = [] -%}
-          {%- if cond_tom -%}
-            {%- set _ = tparts.append(cond_tom) -%}
-          {%- endif -%}
-          {%- if 'temperature' in tomorrow and 'templow' in tomorrow -%}
-            {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
-          {%- elif 'temperature' in tomorrow -%}
-            {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit) -%}
-          {%- elif 'templow' in tomorrow -%}
-            {%- set _ = tparts.append("low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
-          {%- endif -%}
-          {%- if tparts -%}
-            {%- set _ = parts.append("Tomorrow: " ~ (tparts|join(", ")) ~ ".") -%}
-          {%- endif -%}
-        {%- endif -%}
+          # Grab the first value from response dict (maps weather_entity -> data)
+          fc: >-
+            {% if daily is defined and daily|count > 0 %}
+              {{ (daily | dict2items | first).value }}
+            {% else %}{{ none }}{% endif %}
+          today: "{{ fc.forecast[0] if fc and fc.forecast|length>0 else dict() }}"
+          hi: "{{ today.temperature if 'temperature' in today else none }}"
+          lo: "{{ today.templow if 'templow' in today else none }}"
+          pop: "{{ today.precipitation_probability if 'precipitation_probability' in today else none }}"
+          tomorrow: "{{ fc.forecast[1] if fc and fc.forecast|length>1 else dict() }}"
+          cond_tom: "{{ (tomorrow.condition | replace('_',' ')) if 'condition' in tomorrow else '' }}"
 
-        {{ parts|join(" ") }}
+          # Compose the spoken message from enabled pieces
+          msg: >-
+            {%- set parts = [] -%}
+            {%- if temp_now is not none -%}
+              {%- set _ = parts.append("It’s currently " ~ (temp_now|round(0)) ~ unit ~ ", " ~ cond_now ~ ".") -%}
+            {%- else -%}
+              {%- set _ = parts.append("Current conditions: " ~ cond_now ~ ".") -%}
+            {%- endif -%}
 
-  # 3) Optional logging for debugging
-  - service: logbook.log
-    data:
-      name: Weather TTS
-      message: "{{ msg }}"
-      entity_id: !input weather_entity
+            {%- if include_hi_lo_flag -%}
+              {%- if hi is not none and lo is not none -%}
+                {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ", low " ~ (lo|round(0)) ~ unit ~ ".") -%}
+              {%- elif hi is not none -%}
+                {%- set _ = parts.append("Today’s high " ~ (hi|round(0)) ~ unit ~ ".") -%}
+              {%- elif lo is not none -%}
+                {%- set _ = parts.append("Today’s low " ~ (lo|round(0)) ~ unit ~ ".") -%}
+              {%- endif -%}
+            {%- endif -%}
 
-  # 4) Speak on each selected media_player
-  - repeat:
-      for_each: !input media_players
-      sequence:
-        - service: tts.speak
-          target:
-            entity_id: !input tts_entity
-          data:
-            media_player_entity_id: "{{ repeat.item }}"
-            cache: false
-            options:
-              voice: "{{ final_voice }}"
-            message: "{{ msg }}"
+            {%- if include_pop_flag and (pop is not none) -%}
+              {%- set _ = parts.append("Chance of precipitation " ~ pop ~ " percent.") -%}
+            {%- endif -%}
+
+            {%- if include_tomorrow_flag and tomorrow -%}
+              {%- set tparts = [] -%}
+              {%- if cond_tom -%}
+                {%- set _ = tparts.append(cond_tom) -%}
+              {%- endif -%}
+              {%- if 'temperature' in tomorrow and 'templow' in tomorrow -%}
+                {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit ~ ", low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
+              {%- elif 'temperature' in tomorrow -%}
+                {%- set _ = tparts.append("high " ~ (tomorrow.temperature|round(0)) ~ unit) -%}
+              {%- elif 'templow' in tomorrow -%}
+                {%- set _ = tparts.append("low " ~ (tomorrow.templow|round(0)) ~ unit) -%}
+              {%- endif -%}
+              {%- if tparts -%}
+                {%- set _ = parts.append("Tomorrow: " ~ (tparts|join(", ")) ~ ".") -%}
+              {%- endif -%}
+            {%- endif -%}
+
+            {{ parts|join(" ") }}
+
+      # 4) Optional logging for debugging
+      - service: logbook.log
+        data:
+          name: Weather TTS
+          message: "{{ msg }}"
+          entity_id: !input weather_entity
+
+      # 5) Speak on each selected media_player
+      - repeat:
+          for_each: !input media_players
+          sequence:
+            - service: tts.speak
+              target:
+                entity_id: !input tts_entity
+              data:
+                media_player_entity_id: "{{ repeat.item }}"
+                cache: false
+                options:
+                  voice: "{{ final_voice }}"
+                message: "{{ msg }}"
 
 mode: single
