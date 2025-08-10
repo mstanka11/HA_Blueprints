@@ -204,8 +204,8 @@ action:
                 options:
                   voice: "{{ final_voice }}"
                 message: "{{ msg }}"
-            - delay:
-                seconds: 1
+#            - delay:
+#                seconds: 1
             - service: media_player.volume_set
               target:
                 entity_id: "{{ repeat.item }}"
