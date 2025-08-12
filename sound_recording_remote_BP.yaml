@@ -1,5 +1,5 @@
 blueprint:
-  name: ZHA - IKEA SYMFONISK Sound remote, gen 2 (E2123) - with volume hold.
+  name: Z2M - IKEA SYMFONISK Sound remote, gen 2 (E2123) - with volume hold.
   description: Set individual, custom commands for each button on the SYMFONISK Sound remote, gen 2. Including single, double and long press for the shortcut buttons and long press for the volume buttons (firmware version 0x01000035).
 
 #  source_url: https://community.home-assistant.io/t/something-something-something/123456
