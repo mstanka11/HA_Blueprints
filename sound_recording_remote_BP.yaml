@@ -13,7 +13,7 @@ blueprint:
       description: IKEA SYMFONISK Sound remote, gen 2 to use.
       selector:
         device:
-          integration: zha
+          integration: mqtt
           manufacturer: IKEA of Sweden
           model: SYMFONISK sound remote gen2
           multiple: false
